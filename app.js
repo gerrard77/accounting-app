@@ -281,8 +281,8 @@ function renderAccessGate() {
       <hr style="margin:18px 0; border:none; border-top:1px solid #e5e7eb;" />
       <h3 style="margin:0 0 10px;">관리자 로그인</h3>
       <div class="form-grid full">
-        <label>관리자 이메일<input id="adminEmail" type="email" value="jonghoon.kim@spc.co.kr" /></label>
-        <label>비밀번호<input id="adminPassword" type="password" value="1234" /></label>
+        <label>관리자 이메일<input id="adminEmail" type="email" value="" placeholder="관리자 이메일 입력" /></label>
+        <label>비밀번호<input id="adminPassword" type="password" value="" placeholder="비밀번호 입력" /></label>
       </div>
       <div class="actions">
         <button class="btn secondary" id="loginAsAdminBtn">관리자 로그인</button>
