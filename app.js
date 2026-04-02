@@ -244,10 +244,20 @@ function applyAccessUi() {
   const restricted = !state.currentUser || !state.currentUser.approved;
   $('.main').style.display = restricted ? 'none' : 'block';
   $$('.nav-btn').forEach(btn => {
-    if (btn.dataset.view === 'accessControl') {
-      btn.style.display = isAdmin() ? 'block' : 'none';
+    if (restricted) {
+      btn.style.display = btn.dataset.view === 'accessControl' ? 'none' : 'none';
+      btn.disabled = true;
+    } else {
+      btn.disabled = false;
+      if (btn.dataset.view === 'accessControl') {
+        btn.style.display = isAdmin() ? 'block' : 'none';
+      } else {
+        btn.style.display = 'block';
+      }
     }
   });
+  $('.sidebar nav').style.pointerEvents = restricted ? 'none' : 'auto';
+  $('.sidebar nav').style.opacity = restricted ? '0.35' : '1';
 }
 
 function renderAccessGate() {
@@ -258,6 +268,7 @@ function renderAccessGate() {
     applyAccessUi();
     return;
   }
+  switchView('dashboard');
   gate.classList.remove('hidden');
   gate.innerHTML = `
     <div class="access-card">
@@ -294,7 +305,7 @@ function renderAccessGate() {
 }
 
 function switchView(view) {
-  if (!state.currentUser?.approved && view !== 'accessControl') return;
+  if (!state.currentUser?.approved) return;
   $$('.view').forEach(v => v.classList.remove('active'));
   $$('.nav-btn').forEach(v => v.classList.remove('active'));
   document.getElementById(view).classList.add('active');
