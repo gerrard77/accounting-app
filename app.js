@@ -148,6 +148,14 @@ const state = {
   selectedAccountIndex: null,
   selectedVendorIndex: null,
   reconciliationDocs: [],
+  pendingAttachments: [],
+  accessRequests: [
+    { email: 'guest1@example.com', status: 'pending', requestedAt: '2026-04-02' },
+    { email: 'approved@example.com', status: 'approved', requestedAt: '2026-04-02' },
+  ],
+  currentUser: { email: 'gerrard@admin.local', role: 'admin', approved: true },
+  voucherSort: { key: 'postingDate', order: 'asc' },
+  openItemSort: { key: 'postingDate', order: 'asc' },
 };
 
 const $ = (s) => document.querySelector(s);
@@ -167,24 +175,131 @@ function nextReconciliationNo() {
   return `R${String(next).padStart(4, '0')}`;
 }
 
-function downloadCsv(filename, rows) {
+function loadSheetJs(callback) {
+  if (window.XLSX) return callback();
+  const script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+  script.onload = callback;
+  script.onerror = () => alert('엑셀 라이브러리를 불러오지 못했어.');
+  document.head.appendChild(script);
+}
+
+function downloadXlsx(filename, sheetName, rows) {
   if (!rows || !rows.length) return alert('다운로드할 데이터가 없어.');
-  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const csv = rows.map(row => row.map(esc).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+  loadSheetJs(() => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const colWidths = rows[0].map((_, colIdx) => ({ wch: Math.max(...rows.map(r => String(r[colIdx] ?? '').length), 10) }));
+    ws['!cols'] = colWidths;
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    XLSX.writeFile(wb, filename);
+  });
+}
+
+function getSortIndicator(sortState, key) {
+  if (sortState.key !== key) return '↕';
+  return sortState.order === 'asc' ? '↑' : '↓';
+}
+
+function sortBy(rows, sortState, valueGetter) {
+  const sorted = [...rows].sort((a, b) => {
+    const av = valueGetter(a, sortState.key);
+    const bv = valueGetter(b, sortState.key);
+    const aNum = typeof av === 'number' ? av : Number(av);
+    const bNum = typeof bv === 'number' ? bv : Number(bv);
+    let result;
+    if (!Number.isNaN(aNum) && !Number.isNaN(bNum) && String(av).trim() !== '' && String(bv).trim() !== '') {
+      result = aNum - bNum;
+    } else {
+      result = String(av ?? '').localeCompare(String(bv ?? ''), 'ko');
+    }
+    return sortState.order === 'asc' ? result : -result;
+  });
+  return sorted;
+}
+
+function toggleSort(sortState, key) {
+  if (sortState.key === key) {
+    sortState.order = sortState.order === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortState.key = key;
+    sortState.order = 'asc';
+  }
+}
+
+function readFilesAsDataUrls(fileList) {
+  return Promise.all([...fileList].map(file => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({ name: file.name, type: file.type, size: file.size, dataUrl: reader.result });
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  })));
+}
+
+function isAdmin() {
+  return state.currentUser?.role === 'admin';
+}
+
+function applyAccessUi() {
+  const restricted = !state.currentUser || !state.currentUser.approved;
+  $('.main').style.display = restricted ? 'none' : 'block';
+  $$('.nav-btn').forEach(btn => {
+    if (btn.dataset.view === 'accessControl') {
+      btn.style.display = isAdmin() ? 'block' : 'none';
+    }
+  });
+}
+
+function renderAccessGate() {
+  const gate = $('#accessGate');
+  const req = state.currentUser?.email ? state.accessRequests.find(r => r.email === state.currentUser.email) : null;
+  if (state.currentUser?.approved) {
+    gate.classList.add('hidden');
+    applyAccessUi();
+    return;
+  }
+  gate.classList.remove('hidden');
+  gate.innerHTML = `
+    <div class="access-card">
+      <h2>개미나라 사용 신청</h2>
+      <p>사이트를 사용하려면 이메일 주소를 입력하고 권한 신청을 해줘. 관리자가 승인하면 사용할 수 있어.</p>
+      <label>이메일 주소<input id="accessEmail" type="email" value="${state.currentUser?.email || ''}" placeholder="name@example.com" /></label>
+      <div class="actions">
+        <button class="btn success" id="requestAccessBtn">권한 신청</button>
+        <button class="btn secondary" id="loginAsAdminBtn">관리자 데모 로그인</button>
+      </div>
+      <div class="access-status">${req ? `신청 상태: ${req.status}` : '아직 신청 이력이 없어.'}</div>
+    </div>`;
+
+  $('#requestAccessBtn').addEventListener('click', () => {
+    const email = $('#accessEmail').value.trim();
+    if (!email) return alert('이메일 주소를 입력해줘.');
+    let target = state.accessRequests.find(r => r.email === email);
+    if (!target) {
+      target = { email, status: 'pending', requestedAt: today() };
+      state.accessRequests.push(target);
+    } else {
+      target.status = 'pending';
+    }
+    state.currentUser = { email, role: 'user', approved: false };
+    renderAll();
+  });
+
+  $('#loginAsAdminBtn').addEventListener('click', () => {
+    state.currentUser = { email: 'gerrard@admin.local', role: 'admin', approved: true };
+    renderAll();
+    switchView('accessControl');
+  });
+  applyAccessUi();
 }
 
 function switchView(view) {
+  if (!state.currentUser?.approved && view !== 'accessControl') return;
   $$('.view').forEach(v => v.classList.remove('active'));
   $$('.nav-btn').forEach(v => v.classList.remove('active'));
   document.getElementById(view).classList.add('active');
-  document.querySelector(`[data-view="${view}"]`).classList.add('active');
+  const nav = document.querySelector(`[data-view="${view}"]`);
+  if (nav) nav.classList.add('active');
 }
 $$('.nav-btn').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
 
@@ -250,16 +365,113 @@ function computeBalances() {
   return balances;
 }
 
+function plSummary() {
+  const balances = computeBalances();
+  const sumByMajor = (major) => state.accounts.filter(a => a.fs === 'IS' && a.major === major).reduce((s, a) => s + (balances[a.code] || 0), 0);
+  const sales = sumByMajor('매출');
+  const costs = sumByMajor('원가');
+  const sga = sumByMajor('판관비');
+  const nonOpIncome = sumByMajor('영업외수익');
+  const nonOpExpense = sumByMajor('영업외비용');
+  const taxExpense = state.accounts.filter(a => a.fs === 'IS' && a.name.includes('법인세')).reduce((s, a) => s + (balances[a.code] || 0), 0);
+  const netIncome = sales - costs - sga + nonOpIncome - nonOpExpense - taxExpense;
+  return { sales, costs, sga, nonOpIncome, nonOpExpense, taxExpense, netIncome };
+}
+
 function renderDashboard() {
-  const openItems = currentOpenItems();
-  const ar = openItems.filter(i => i.accountCode === '1102').reduce((s,i)=>s+i.remaining,0);
-  const ap = openItems.filter(i => ['2101','2102'].includes(i.accountCode)).reduce((s,i)=>s+i.remaining,0);
+  const balances = computeBalances();
+  const openItems = currentOpenItems().filter(i => i.status !== 'closed');
+  const pl = plSummary();
+  const openByVendor = [...openItems].reduce((acc, item) => {
+    const key = vendorLabel(item.vendorCode) || '거래처 없음';
+    acc[key] = (acc[key] || 0) + item.remaining;
+    return acc;
+  }, {});
+  const openByAccount = [...openItems].reduce((acc, item) => {
+    const key = accountLabel(item.accountCode);
+    acc[key] = (acc[key] || 0) + item.remaining;
+    return acc;
+  }, {});
+  const recentVouchers = [...state.vouchers].sort((a, b) => String(b.postingDate).localeCompare(String(a.postingDate)) || Number(b.no) - Number(a.no)).slice(0, 7);
+  const topVendors = Object.entries(openByVendor).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const topAccounts = Object.entries(openByAccount).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
   $('#dashboard').innerHTML = `
-    <div class="card-grid">
+    <div class="card-grid six">
       <div class="card"><h3>전표 건수</h3><strong>${format(state.vouchers.length)}</strong></div>
-      <div class="card"><h3>미결 건수</h3><strong>${format(openItems.filter(i=>i.status!=='closed').length)}</strong></div>
-      <div class="card"><h3>외상매출금 잔액</h3><strong>${format(ar)}</strong></div>
-      <div class="card"><h3>외상/미지급 잔액</h3><strong>${format(ap)}</strong></div>
+      <div class="card"><h3>미결 건수</h3><strong>${format(openItems.length)}</strong></div>
+      <div class="card"><h3>미결 잔액 합계</h3><strong>${format(openItems.reduce((s, i) => s + i.remaining, 0))}</strong></div>
+      <div class="card"><h3>당기 매출</h3><strong>${format(pl.sales)}</strong></div>
+      <div class="card"><h3>당기 비용</h3><strong>${format(pl.costs + pl.sga + pl.nonOpExpense + pl.taxExpense)}</strong></div>
+      <div class="card"><h3>당기순이익</h3><strong>${format(pl.netIncome)}</strong></div>
+    </div>
+
+    <div class="report-grid dashboard-grid-3">
+      <div class="panel">
+        <h2>주요 계정 잔액</h2>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><td>보통예금</td><td>${format(balances['1101'] || 0)}</td></tr>
+              <tr><td>외상매출금</td><td>${format(balances['1102'] || 0)}</td></tr>
+              <tr><td>미수금</td><td>${format(balances['1103'] || 0)}</td></tr>
+              <tr><td>외상매입금</td><td>${format(balances['2101'] || 0)}</td></tr>
+              <tr><td>미지급금</td><td>${format(balances['2102'] || 0)}</td></tr>
+              <tr><td>매출부가세</td><td>${format(balances['2105'] || 0)}</td></tr>
+              <tr><td>예수금</td><td>${format(balances['2107'] || 0)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>미결 거래처 TOP</h2>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              ${topVendors.length ? topVendors.map(([name, amount]) => `<tr><td>${name}</td><td>${format(amount)}</td></tr>`).join('') : '<tr><td colspan="2">미결 없음</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>미결 계정 요약</h2>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              ${topAccounts.length ? topAccounts.map(([name, amount]) => `<tr><td>${name}</td><td>${format(amount)}</td></tr>`).join('') : '<tr><td colspan="2">미결 없음</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="report-grid">
+      <div class="panel">
+        <h2>손익 요약</h2>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><td>매출</td><td>${format(pl.sales)}</td></tr>
+              <tr><td>원가</td><td>${format(pl.costs)}</td></tr>
+              <tr><td>판관비</td><td>${format(pl.sga)}</td></tr>
+              <tr><td>영업외수익</td><td>${format(pl.nonOpIncome)}</td></tr>
+              <tr><td>영업외비용</td><td>${format(pl.nonOpExpense)}</td></tr>
+              <tr><th>당기순이익</th><th>${format(pl.netIncome)}</th></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>최근 전표</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>전기일자</th><th>전표번호</th><th>적요</th><th>금액</th></tr></thead>
+            <tbody>
+              ${recentVouchers.map(v => `<tr><td>${v.postingDate}</td><td>${v.no}</td><td>${v.desc || ''}</td><td>${format(v.totalAmount)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -283,6 +495,10 @@ function renderEntries() {
       <div class="form-grid full" style="margin-top:12px;">
         <label>적요<input id="voucherDesc" type="text" value="${desc}" placeholder="예: 6월 관리비" /></label>
       </div>
+      <div class="form-grid full" style="margin-top:12px;">
+        <label>첨부파일<input id="voucherAttachments" type="file" multiple /></label>
+      </div>
+      <div id="attachmentList" class="small" style="margin-top:8px;"></div>
       <div class="actions" style="margin-top:10px;">
         <div class="card"><h3>차변 합계</h3><strong id="debitTotal">0</strong></div>
         <div class="card"><h3>대변 합계</h3><strong id="creditTotal">0</strong></div>
@@ -323,7 +539,20 @@ function renderEntries() {
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>선택</th><th>전기일자</th><th>증빙일자</th><th>전표번호</th><th>차변</th><th>대변</th><th>금액</th><th>거래처</th><th>적요</th></tr></thead>
+          <thead>
+            <tr>
+              <th>선택</th>
+              <th class="sortable" data-sort="postingDate">전기일자 ${getSortIndicator(state.voucherSort, 'postingDate')}</th>
+              <th class="sortable" data-sort="evidenceDate">증빙일자 ${getSortIndicator(state.voucherSort, 'evidenceDate')}</th>
+              <th class="sortable" data-sort="no">전표번호 ${getSortIndicator(state.voucherSort, 'no')}</th>
+              <th class="sortable" data-sort="debit">차변 ${getSortIndicator(state.voucherSort, 'debit')}</th>
+              <th class="sortable" data-sort="credit">대변 ${getSortIndicator(state.voucherSort, 'credit')}</th>
+              <th class="sortable" data-sort="totalAmount">금액 ${getSortIndicator(state.voucherSort, 'totalAmount')}</th>
+              <th class="sortable" data-sort="vendor">거래처 ${getSortIndicator(state.voucherSort, 'vendor')}</th>
+              <th class="sortable" data-sort="desc">적요 ${getSortIndicator(state.voucherSort, 'desc')}</th>
+              <th>첨부파일</th>
+            </tr>
+          </thead>
           <tbody id="voucherTableBody"></tbody>
         </table>
       </div>
@@ -349,22 +578,29 @@ function renderEntries() {
   }));
   updateTotals();
 
+  const voucherRowsNormalized = (rows) => rows.map(v => ({
+    ...v,
+    debit: accountLabel(v.lines.find(l => l.debitAmount > 0 && l.accountCode)?.accountCode || ''),
+    credit: accountLabel(v.lines.find(l => l.creditAmount > 0 && l.accountCode)?.accountCode || ''),
+    vendor: vendorLabel(v.lines.find(l => l.vendorCode)?.vendorCode || ''),
+    attachments: v.attachments || [],
+  }));
+
   const renderVoucherRows = (rows = state.vouchers) => {
-    $('#voucherTableBody').innerHTML = rows.map(v => {
-      const firstDebit = v.lines.find(l => l.debitAmount > 0 && l.accountCode)?.accountCode || '';
-      const firstCredit = v.lines.find(l => l.creditAmount > 0 && l.accountCode)?.accountCode || '';
-      return `<tr>
+    const sortedRows = sortBy(voucherRowsNormalized(rows), state.voucherSort, (row, key) => row[key] ?? '');
+    $('#voucherTableBody').innerHTML = sortedRows.map(v => `
+      <tr>
         <td><input type="checkbox" class="voucher-check" value="${v.id}" /></td>
         <td>${v.postingDate}</td>
         <td>${v.evidenceDate}</td>
         <td><button class="btn secondary voucher-link" data-id="${v.id}" style="padding:4px 8px;">${v.no}</button></td>
-        <td>${accountLabel(firstDebit)}</td>
-        <td>${accountLabel(firstCredit)}</td>
+        <td>${v.debit}</td>
+        <td>${v.credit}</td>
         <td>${format(v.totalAmount)}</td>
-        <td>${vendorLabel(v.lines.find(l => l.vendorCode)?.vendorCode || '')}</td>
+        <td>${v.vendor}</td>
         <td>${v.desc || ''}</td>
-      </tr>`;
-    }).join('');
+        <td>${v.attachments.length ? v.attachments.map((file, idx) => `<a href="${file.dataUrl}" download="${file.name}" target="_blank">${file.name}</a>`).join('<br>') : '-'}</td>
+      </tr>`).join('');
 
     $$('.voucher-link').forEach(btn => btn.addEventListener('click', () => {
       state.selectedVoucherId = Number(btn.dataset.id);
@@ -372,6 +608,20 @@ function renderEntries() {
     }));
   };
   renderVoucherRows();
+
+  const existingAttachments = voucher?.attachments || state.pendingAttachments || [];
+  $('#attachmentList').innerHTML = existingAttachments.length ? existingAttachments.map(file => `<div>${file.name}</div>`).join('') : '첨부파일 없음';
+
+  $('#voucherAttachments').addEventListener('change', async (e) => {
+    const files = await readFilesAsDataUrls(e.target.files);
+    state.pendingAttachments = files;
+    $('#attachmentList').innerHTML = files.length ? files.map(file => `<div>${file.name}</div>`).join('') : '첨부파일 없음';
+  });
+
+  $$('.sortable').forEach(th => th.addEventListener('click', () => {
+    toggleSort(state.voucherSort, th.dataset.sort);
+    renderEntries();
+  }));
 
   $('#filterVoucherBtn').addEventListener('click', () => {
     const p = $('#filterPostingDate').value;
@@ -411,12 +661,8 @@ function renderEntries() {
   });
 
   $('#exportVoucherBtn').addEventListener('click', () => {
-    const rows = [['전기일자','증빙일자','전표번호','차변','대변','금액','거래처','적요'], ...state.vouchers.map(v => {
-      const firstDebit = v.lines.find(l => l.debitAmount > 0 && l.accountCode)?.accountCode || '';
-      const firstCredit = v.lines.find(l => l.creditAmount > 0 && l.accountCode)?.accountCode || '';
-      return [v.postingDate, v.evidenceDate, v.no, accountLabel(firstDebit), accountLabel(firstCredit), v.totalAmount, vendorLabel(v.lines.find(l => l.vendorCode)?.vendorCode || ''), v.desc || ''];
-    })];
-    downloadCsv('vouchers.csv', rows);
+    const rows = [['전기일자','증빙일자','전표번호','차변','대변','금액','거래처','적요'], ...voucherRowsNormalized(state.vouchers).map(v => [v.postingDate, v.evidenceDate, v.no, v.debit, v.credit, v.totalAmount, v.vendor, v.desc || ''])];
+    downloadXlsx('전표목록.xlsx', '전표목록', rows);
   });
 
   $('#newVoucherBtn').addEventListener('click', () => {
@@ -446,6 +692,7 @@ function renderEntries() {
       desc: desc2,
       totalAmount: debit,
       lines: lines2,
+      attachments: state.pendingAttachments.length ? state.pendingAttachments : (state.vouchers.find(v => v.id === state.selectedVoucherId)?.attachments || []),
       reconciliations: state.vouchers.find(v => v.id === state.selectedVoucherId)?.reconciliations || []
     };
     if (state.selectedVoucherId) {
@@ -453,6 +700,7 @@ function renderEntries() {
     } else {
       state.vouchers.push(voucherObj);
     }
+    state.pendingAttachments = [];
     state.selectedVoucherId = null;
     renderAll();
   });
@@ -528,7 +776,7 @@ function renderVendors() {
 
   $('#exportVendorBtn').addEventListener('click', () => {
     const rows = [['코드','사업자번호','업체명','은행','계좌번호','예금주명','대표자명','업종','업태','이메일','사업장주소'], ...state.vendors.map(v => [v.code, v.businessNo, v.name, v.bankName, v.accountNo, v.depositor, v.ceoName, v.businessType, v.businessCategory, v.email, v.address])];
-    downloadCsv('vendors.csv', rows);
+    downloadXlsx('거래처관리.xlsx', '거래처관리', rows);
   });
 }
 
@@ -601,7 +849,7 @@ function renderAccounts() {
 
   $('#exportAccountBtn').addEventListener('click', () => {
     const rows = [['코드','계정과목명','FS','대분류','중분류'], ...state.accounts.map(a => [a.code, a.name, a.fs, a.major, a.minor])];
-    downloadCsv('accounts.csv', rows);
+    downloadXlsx('계정과목.xlsx', '계정과목', rows);
   });
 }
 
@@ -624,17 +872,39 @@ function renderOpenItems() {
       </div>
       <div class="table-wrap" style="margin-top:12px;">
         <table>
-          <thead><tr><th>선택</th><th>발생일자</th><th>전표번호</th><th>거래처</th><th>계정과목</th><th>적요</th><th>차변</th><th>대변</th><th>반제금액</th><th>잔액</th><th>상태</th><th>반제</th></tr></thead>
+          <thead>
+            <tr>
+              <th>선택</th>
+              <th class="sortable-open" data-sort="postingDate">발생일자 ${getSortIndicator(state.openItemSort, 'postingDate')}</th>
+              <th class="sortable-open" data-sort="voucherNo">전표번호 ${getSortIndicator(state.openItemSort, 'voucherNo')}</th>
+              <th class="sortable-open" data-sort="vendor">거래처 ${getSortIndicator(state.openItemSort, 'vendor')}</th>
+              <th class="sortable-open" data-sort="account">계정과목 ${getSortIndicator(state.openItemSort, 'account')}</th>
+              <th class="sortable-open" data-sort="desc">적요 ${getSortIndicator(state.openItemSort, 'desc')}</th>
+              <th class="sortable-open" data-sort="debitAmount">차변 ${getSortIndicator(state.openItemSort, 'debitAmount')}</th>
+              <th class="sortable-open" data-sort="creditAmount">대변 ${getSortIndicator(state.openItemSort, 'creditAmount')}</th>
+              <th class="sortable-open" data-sort="settled">반제금액 ${getSortIndicator(state.openItemSort, 'settled')}</th>
+              <th class="sortable-open" data-sort="remaining">잔액 ${getSortIndicator(state.openItemSort, 'remaining')}</th>
+              <th class="sortable-open" data-sort="status">상태 ${getSortIndicator(state.openItemSort, 'status')}</th>
+            </tr>
+          </thead>
           <tbody id="openItemTableBody"></tbody>
         </table>
       </div>
     </div>`;
 
+  const normalizeRows = (rows) => rows.map(i => ({ ...i, vendor: vendorLabel(i.vendorCode), account: accountLabel(i.accountCode) }));
+
   const renderRows = (rows) => {
-    $('#openItemTableBody').innerHTML = rows.map(i => `<tr><td><input type="checkbox" class="openitem-check" value="${i.key}" /></td><td>${i.postingDate}</td><td>${i.voucherNo}</td><td>${vendorLabel(i.vendorCode)}</td><td>${accountLabel(i.accountCode)}</td><td>${i.desc}</td><td>${format(i.debitAmount)}</td><td>${format(i.creditAmount)}</td><td>${format(i.settled)}</td><td>${format(i.remaining)}</td><td><span class="badge ${i.status}">${i.status}</span></td><td><button class="btn secondary reconcile-btn" data-key="${i.key}">반제</button></td></tr>`).join('');
+    const sortedRows = sortBy(normalizeRows(rows), state.openItemSort, (row, key) => row[key] ?? '');
+    $('#openItemTableBody').innerHTML = sortedRows.map(i => `<tr><td><input type="checkbox" class="openitem-check" value="${i.key}" /></td><td>${i.postingDate}</td><td>${i.voucherNo}</td><td>${i.vendor}</td><td>${i.account}</td><td>${i.desc}</td><td>${format(i.debitAmount)}</td><td>${format(i.creditAmount)}</td><td>${format(i.settled)}</td><td>${format(i.remaining)}</td><td><span class="badge ${i.status}">${i.status}</span></td></tr>`).join('');
   };
 
   renderRows(items);
+
+  $$('.sortable-open').forEach(th => th.addEventListener('click', () => {
+    toggleSort(state.openItemSort, th.dataset.sort);
+    renderOpenItems();
+  }));
 
   $('#filterOpenItemsBtn').addEventListener('click', () => {
     const account = $('#openItemAccountFilter').value;
@@ -660,14 +930,13 @@ function renderOpenItems() {
     const creditTotal = selectedItems.reduce((s, i) => s + i.creditAmount, 0);
     if (debitTotal !== creditTotal) return alert('선택한 전표들의 차변/대변 합계가 일치해야 반제 가능해.');
     const recNo = nextReconciliationNo();
-    const minRemaining = Math.min(...selectedItems.map(i => i.remaining));
-    const amount = minRemaining;
+    const amount = Math.min(...selectedItems.map(i => i.remaining));
     selectedItems.forEach(item => {
       const v = state.vouchers.find(x => x.id === item.voucherId);
       v.reconciliations = v.reconciliations || [];
       v.reconciliations.push({ recNo, openKey: item.key, amount });
     });
-    state.reconciliationDocs.push({ no: recNo, date: today(), keys: selectedKeys, amount });
+    state.reconciliationDocs.push({ no: recNo, date: today(), keys: selectedKeys, amount, debitTotal, creditTotal });
     alert(`반제 완료: ${recNo}`);
     renderAll();
   });
@@ -687,21 +956,15 @@ function renderOpenItems() {
   });
 
   $('#exportOpenItemsBtn').addEventListener('click', () => {
-    const rows = [['발생일자','전표번호','거래처','계정과목','적요','차변','대변','반제금액','잔액','상태'], ...currentOpenItems().map(i => [i.postingDate, i.voucherNo, vendorLabel(i.vendorCode), accountLabel(i.accountCode), i.desc, i.debitAmount, i.creditAmount, i.settled, i.remaining, i.status])];
-    downloadCsv('open_items.csv', rows);
+    const rows = [['발생일자','전표번호','거래처','계정과목','적요','차변','대변','반제금액','잔액','상태'], ...normalizeRows(currentOpenItems()).map(i => [i.postingDate, i.voucherNo, i.vendor, i.account, i.desc, i.debitAmount, i.creditAmount, i.settled, i.remaining, i.status])];
+    downloadXlsx('미결관리.xlsx', '미결관리', rows);
   });
 }
 
 function renderBsReport() {
   const balances = computeBalances();
-
-  const sales = state.accounts.filter(a => a.fs === 'IS' && a.major === '매출').reduce((s,a) => s + (balances[a.code] || 0), 0);
-  const costs = state.accounts.filter(a => a.fs === 'IS' && a.major === '원가').reduce((s,a) => s + (balances[a.code] || 0), 0);
-  const sga = state.accounts.filter(a => a.fs === 'IS' && a.major === '판관비').reduce((s,a) => s + (balances[a.code] || 0), 0);
-  const nonOpIncome = state.accounts.filter(a => a.fs === 'IS' && a.major === '영업외수익').reduce((s,a) => s + (balances[a.code] || 0), 0);
-  const nonOpExpense = state.accounts.filter(a => a.fs === 'IS' && a.major === '영업외비용').reduce((s,a) => s + (balances[a.code] || 0), 0);
-  const taxExpense = state.accounts.filter(a => a.fs === 'IS' && a.name.includes('법인세')).reduce((s,a) => s + (balances[a.code] || 0), 0);
-  const netIncome = sales - costs - sga + nonOpIncome - nonOpExpense - taxExpense;
+  const pl = plSummary();
+  const netIncome = pl.netIncome;
 
   const rowsBy = (major, minor) => state.accounts
     .filter(a => a.fs === 'BS' && a.major === major && a.minor === minor)
@@ -784,7 +1047,7 @@ function renderBsReport() {
       ['자본 합계','', totalEquity],
       ['BS 검증','', `${totalAssets} = ${totalLiabilities + totalEquity}`]
     ];
-    downloadCsv('bs_report.csv', rows);
+    downloadXlsx('재무상태표.xlsx', '재무상태표', rows);
   });
 }
 
@@ -876,8 +1139,45 @@ function renderPlReport() {
       ['법인세비용 합계','', taxExpenseTotal],
       ['당기순이익','', netIncome]
     ];
-    downloadCsv('pl_report.csv', rows);
+    downloadXlsx('손익계산서.xlsx', '손익계산서', rows);
   });
+}
+
+function renderAccessControl() {
+  $('#accessControl').innerHTML = `
+    <div class="panel">
+      <h2>권한처리</h2>
+      <div class="actions">
+        <button class="btn secondary" id="adminLogoutBtn">관리자 로그아웃</button>
+      </div>
+      <div class="table-wrap" style="margin-top:12px;">
+        <table>
+          <thead><tr><th>이메일</th><th>신청일</th><th>상태</th><th>승인</th><th>반려</th></tr></thead>
+          <tbody>
+            ${state.accessRequests.map((req, idx) => `<tr><td>${req.email}</td><td>${req.requestedAt}</td><td>${req.status}</td><td><button class="btn success approve-access-btn" data-index="${idx}">승인</button></td><td><button class="btn secondary reject-access-btn" data-index="${idx}">반려</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  $('#adminLogoutBtn').addEventListener('click', () => {
+    state.currentUser = { email: '', role: 'user', approved: false };
+    renderAll();
+  });
+
+  $$('.approve-access-btn').forEach(btn => btn.addEventListener('click', () => {
+    const req = state.accessRequests[Number(btn.dataset.index)];
+    req.status = 'approved';
+    if (state.currentUser?.email === req.email) state.currentUser.approved = true;
+    renderAll();
+  }));
+
+  $$('.reject-access-btn').forEach(btn => btn.addEventListener('click', () => {
+    const req = state.accessRequests[Number(btn.dataset.index)];
+    req.status = 'rejected';
+    if (state.currentUser?.email === req.email) state.currentUser.approved = false;
+    renderAll();
+  }));
 }
 
 function renderAll() {
@@ -888,6 +1188,8 @@ function renderAll() {
   renderOpenItems();
   renderBsReport();
   renderPlReport();
+  renderAccessControl();
+  renderAccessGate();
 }
 
 window.switchView = switchView;
