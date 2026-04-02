@@ -153,7 +153,7 @@ const state = {
     { email: 'guest1@example.com', status: 'pending', requestedAt: '2026-04-02' },
     { email: 'approved@example.com', status: 'approved', requestedAt: '2026-04-02' },
   ],
-  currentUser: { email: 'gerrard@admin.local', role: 'admin', approved: true },
+  currentUser: { email: '', role: 'user', approved: false },
   voucherSort: { key: 'postingDate', order: 'asc' },
   openItemSort: { key: 'postingDate', order: 'asc' },
 };
@@ -277,7 +277,15 @@ function renderAccessGate() {
       <label>이메일 주소<input id="accessEmail" type="email" value="${state.currentUser?.email || ''}" placeholder="name@example.com" /></label>
       <div class="actions">
         <button class="btn success" id="requestAccessBtn">권한 신청</button>
-        <button class="btn secondary" id="loginAsAdminBtn">관리자 데모 로그인</button>
+      </div>
+      <hr style="margin:18px 0; border:none; border-top:1px solid #e5e7eb;" />
+      <h3 style="margin:0 0 10px;">관리자 로그인</h3>
+      <div class="form-grid full">
+        <label>관리자 이메일<input id="adminEmail" type="email" value="jonghoon.kim@spc.co.kr" /></label>
+        <label>비밀번호<input id="adminPassword" type="password" value="1234" /></label>
+      </div>
+      <div class="actions">
+        <button class="btn secondary" id="loginAsAdminBtn">관리자 로그인</button>
       </div>
       <div class="access-status">${req ? `신청 상태: ${req.status}` : '아직 신청 이력이 없어.'}</div>
     </div>`;
@@ -297,7 +305,12 @@ function renderAccessGate() {
   });
 
   $('#loginAsAdminBtn').addEventListener('click', () => {
-    state.currentUser = { email: 'gerrard@admin.local', role: 'admin', approved: true };
+    const email = $('#adminEmail').value.trim();
+    const password = $('#adminPassword').value;
+    if (email !== 'jonghoon.kim@spc.co.kr' || password !== '1234') {
+      return alert('관리자 계정 정보가 올바르지 않아.');
+    }
+    state.currentUser = { email: 'jonghoon.kim@spc.co.kr', role: 'admin', approved: true };
     renderAll();
     switchView('accessControl');
   });
