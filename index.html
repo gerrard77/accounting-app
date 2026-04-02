@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simple Accounting App</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <h1>회계 웹앱</h1>
+      <nav>
+        <button class="nav-btn active" data-view="dashboard">대시보드</button>
+        <button class="nav-btn" data-view="entries">전표입력</button>
+        <button class="nav-btn" data-view="vendors">거래처관리</button>
+        <button class="nav-btn" data-view="accounts">계정과목</button>
+        <button class="nav-btn" data-view="openItems">미결관리</button>
+        <button class="nav-btn" data-view="bsReport">재무상태표(BS)</button>
+        <button class="nav-btn" data-view="plReport">손익계산서(PL)</button>
+      </nav>
+    </aside>
+    <main class="main">
+      <section id="dashboard" class="view active"></section>
+      <section id="entries" class="view"></section>
+      <section id="vendors" class="view"></section>
+      <section id="accounts" class="view"></section>
+      <section id="openItems" class="view"></section>
+      <section id="bsReport" class="view"></section>
+      <section id="plReport" class="view"></section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
