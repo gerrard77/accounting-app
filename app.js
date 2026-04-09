@@ -1,3 +1,5 @@
+const STORAGE_KEY = 'gaeminara-demo-state-v1';
+
 const state = {
   accounts: [
     { code: '1101', name: '보통예금', fs: 'BS', major: '자산', minor: '유동자산' },
@@ -236,6 +238,37 @@ function readFilesAsDataUrls(fileList) {
   })));
 }
 
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    vouchers: state.vouchers,
+    vendors: state.vendors,
+    accounts: state.accounts,
+    reconciliationDocs: state.reconciliationDocs,
+    accessRequests: state.accessRequests,
+    currentUser: state.currentUser,
+    voucherSort: state.voucherSort,
+    openItemSort: state.openItemSort,
+  }));
+}
+
+function loadState() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw);
+    state.vouchers = parsed.vouchers || state.vouchers;
+    state.vendors = parsed.vendors || state.vendors;
+    state.accounts = parsed.accounts || state.accounts;
+    state.reconciliationDocs = parsed.reconciliationDocs || state.reconciliationDocs;
+    state.accessRequests = parsed.accessRequests || state.accessRequests;
+    state.currentUser = parsed.currentUser || state.currentUser;
+    state.voucherSort = parsed.voucherSort || state.voucherSort;
+    state.openItemSort = parsed.openItemSort || state.openItemSort;
+  } catch (e) {
+    console.error('state load failed', e);
+  }
+}
+
 function isAdmin() {
   return state.currentUser?.role === 'admin';
 }
@@ -272,22 +305,16 @@ function renderAccessGate() {
   gate.classList.remove('hidden');
   gate.innerHTML = `
     <div class="access-card">
-      <h2>개미나라 사용 신청</h2>
-      <p>사이트를 사용하려면 이메일 주소를 입력하고 권한 신청을 해줘. 관리자가 승인하면 사용할 수 있어.</p>
-      <label>이메일 주소<input id="accessEmail" type="email" value="${state.currentUser?.email || ''}" placeholder="name@example.com" /></label>
-      <div class="actions">
-        <button class="btn success" id="requestAccessBtn">권한 신청</button>
-      </div>
-      <hr style="margin:18px 0; border:none; border-top:1px solid #e5e7eb;" />
-      <h3 style="margin:0 0 10px;">관리자 로그인</h3>
+      <h2>개미나라 로그인</h2>
+      <p>등록된 아이디와 비밀번호를 입력해 로그인해줘.</p>
       <div class="form-grid full">
-        <label>관리자 이메일<input id="adminEmail" type="email" value="" placeholder="관리자 이메일 입력" /></label>
+        <label>아이디<input id="adminEmail" type="text" value="" placeholder="아이디 입력" /></label>
         <label>비밀번호<input id="adminPassword" type="password" value="" placeholder="비밀번호 입력" /></label>
       </div>
       <div class="actions">
-        <button class="btn secondary" id="loginAsAdminBtn">관리자 로그인</button>
+        <button class="btn secondary" id="loginAsAdminBtn">로그인</button>
       </div>
-      <div class="access-status">${req ? `신청 상태: ${req.status}` : '아직 신청 이력이 없어.'}</div>
+      <div class="access-status">${req ? `신청 상태: ${req.status}` : ''}</div>
     </div>`;
 
   $('#requestAccessBtn').addEventListener('click', () => {
@@ -301,6 +328,8 @@ function renderAccessGate() {
       target.status = 'pending';
     }
     state.currentUser = { email, role: 'user', approved: false };
+    saveState();
+    saveState();
     renderAll();
   });
 
@@ -311,6 +340,7 @@ function renderAccessGate() {
       return alert('관리자 계정 정보가 올바르지 않아.');
     }
     state.currentUser = { email: 'jonghoon.kim@spc.co.kr', role: 'admin', approved: true };
+    saveState();
     renderAll();
     switchView('accessControl');
   });
@@ -330,6 +360,12 @@ $$('.nav-btn').forEach(btn => btn.addEventListener('click', () => switchView(btn
 function nextVoucherNo() {
   const nums = state.vouchers.map(v => Number(v.no)).filter(Boolean);
   return String(nums.length ? Math.max(...nums) + 1 : 1);
+}
+
+function nextVendorCode() {
+  const nums = state.vendors.map(v => Number(String(v.code || '').replace(/[^0-9]/g, ''))).filter(Boolean);
+  const next = nums.length ? Math.max(...nums) + 1 : 1;
+  return `V${String(next).padStart(3, '0')}`;
 }
 
 function emptyLines() {
@@ -679,8 +715,12 @@ function renderEntries() {
   $('#deleteVoucherBtn').addEventListener('click', () => {
     const ids = $$('.voucher-check:checked').map(el => Number(el.value));
     if (!ids.length) return alert('삭제할 전표를 선택해줘.');
+    const ok = confirm(`선택한 전표 ${ids.length}건을 삭제할까?`);
+    if (!ok) return;
     state.vouchers = state.vouchers.filter(v => !ids.includes(v.id));
     state.selectedVoucherId = null;
+    saveState();
+    alert('전표 삭제가 저장됐어.');
     renderAll();
   });
 
@@ -726,6 +766,7 @@ function renderEntries() {
     }
     state.pendingAttachments = [];
     state.selectedVoucherId = null;
+    saveState();
     renderAll();
   });
 }
@@ -746,7 +787,7 @@ function renderVendors() {
       <div class="panel">
         <h2>거래처 등록 / 수정</h2>
         <div class="form-grid">
-          <label>거래처코드<input id="vendorCode" type="text" /></label>
+          <label>거래처코드<input id="vendorCode" type="text" readonly /></label>
           <label>사업자번호<input id="vendorBusinessNo" type="text" /></label>
           <label>업체명<input id="vendorName" type="text" /></label>
           <label>은행<input id="vendorBankName" type="text" /></label>
@@ -768,12 +809,13 @@ function renderVendors() {
     const idx = Number(btn.dataset.index);
     state.vendors.splice(idx, 1);
     state.selectedVendorIndex = null;
+    saveState();
     renderAll();
   }));
 
   const sv = state.vendors[state.selectedVendorIndex] || {};
   if ($('#vendorCode')) {
-    $('#vendorCode').value = sv.code || '';
+    $('#vendorCode').value = sv.code || nextVendorCode();
     $('#vendorBusinessNo').value = sv.businessNo || '';
     $('#vendorName').value = sv.name || '';
     $('#vendorBankName').value = sv.bankName || '';
@@ -788,13 +830,14 @@ function renderVendors() {
 
   $('#saveVendorBtn').addEventListener('click', () => {
     const payload = {
-      code: $('#vendorCode').value.trim(), businessNo: $('#vendorBusinessNo').value.trim(), name: $('#vendorName').value.trim(),
+      code: state.selectedVendorIndex !== null ? state.vendors[state.selectedVendorIndex].code : nextVendorCode(), businessNo: $('#vendorBusinessNo').value.trim(), name: $('#vendorName').value.trim(),
       bankName: $('#vendorBankName').value.trim(), accountNo: $('#vendorAccountNo').value.trim(), depositor: $('#vendorDepositor').value.trim(),
       ceoName: $('#vendorCeoName').value.trim(), businessType: $('#vendorBusinessType').value.trim(), businessCategory: $('#vendorBusinessCategory').value.trim(),
       email: $('#vendorEmail').value.trim(), address: $('#vendorAddress').value.trim()
     };
     if (state.selectedVendorIndex !== null) state.vendors[state.selectedVendorIndex] = payload; else state.vendors.push(payload);
     state.selectedVendorIndex = null;
+    saveState();
     renderAll();
   });
 
@@ -837,12 +880,12 @@ function renderAccounts() {
   $('#addAccountBtn').addEventListener('click', () => { state.selectedAccountIndex = null; renderAccounts(); });
   $$('.edit-account-btn').forEach(btn => btn.addEventListener('click', () => { state.selectedAccountIndex = Number(btn.dataset.index); renderAccounts(); }));
   $$('.delete-account-btn').forEach(btn => btn.addEventListener('click', () => {
-    const idx = Number(btn.dataset.index); state.accounts.splice(idx, 1); state.selectedAccountIndex = null; renderAll();
+    const idx = Number(btn.dataset.index); state.accounts.splice(idx, 1); state.selectedAccountIndex = null; saveState(); renderAll();
   }));
   $('#deleteCheckedAccountsBtn').addEventListener('click', () => {
     const indexes = $$('.account-check:checked').map(el => Number(el.dataset.index)).sort((a,b)=>b-a);
     indexes.forEach(idx => state.accounts.splice(idx,1));
-    state.selectedAccountIndex = null; renderAll();
+    state.selectedAccountIndex = null; saveState(); renderAll();
   });
 
   const sa = state.accounts[state.selectedAccountIndex] || {};
@@ -868,6 +911,7 @@ function renderAccounts() {
       state.accounts[state.selectedAccountIndex] = payload;
     }
     state.selectedAccountIndex = null;
+    saveState();
     renderAll();
   });
 
@@ -961,6 +1005,7 @@ function renderOpenItems() {
       v.reconciliations.push({ recNo, openKey: item.key, amount });
     });
     state.reconciliationDocs.push({ no: recNo, date: today(), keys: selectedKeys, amount, debitTotal, creditTotal });
+    saveState();
     alert(`반제 완료: ${recNo}`);
     renderAll();
   });
@@ -976,6 +1021,7 @@ function renderOpenItems() {
       });
       state.reconciliationDocs = state.reconciliationDocs.filter(doc => !doc.keys.some(k => checked.includes(k)));
     }
+    saveState();
     renderAll();
   });
 
@@ -1186,6 +1232,7 @@ function renderAccessControl() {
 
   $('#adminLogoutBtn').addEventListener('click', () => {
     state.currentUser = { email: '', role: 'user', approved: false };
+    saveState();
     renderAll();
   });
 
@@ -1193,6 +1240,7 @@ function renderAccessControl() {
     const req = state.accessRequests[Number(btn.dataset.index)];
     req.status = 'approved';
     if (state.currentUser?.email === req.email) state.currentUser.approved = true;
+    saveState();
     renderAll();
   }));
 
@@ -1200,6 +1248,7 @@ function renderAccessControl() {
     const req = state.accessRequests[Number(btn.dataset.index)];
     req.status = 'rejected';
     if (state.currentUser?.email === req.email) state.currentUser.approved = false;
+    saveState();
     renderAll();
   }));
 }
@@ -1219,4 +1268,5 @@ function renderAll() {
 window.switchView = switchView;
 window.renderAll = renderAll;
 
+loadState();
 renderAll();
